@@ -2,6 +2,7 @@ import os
 import torch
 import urllib
 import cv2
+from dask import bag
 import random
 from ast import literal_eval
 import numpy as np
@@ -23,6 +24,18 @@ qd_names =['cup','garden hose', 'marker', 'truck', 'oven', 'cooler', 'birthday c
 
 # The following functions come from Sketch-A-Net
 # [Sketch-A-XNORNet](http://github.com/ayush29feb/Sketch-A-XNORNet)
+def data_draw_cv2(raw_strokes, size=96, linewidth=6, time_color=True):
+    img = np.zeros((256, 256), np.uint8)
+    for t, stroke in enumerate(literal_eval(raw_strokes)):
+        for i in range(len(stroke[0]) - 1):
+            color = 255 - min(t, 10) * 13 if time_color else 255
+            _ = cv2.line(img, (stroke[0][i], stroke[1][i]), 
+                         (stroke[0][i + 1], stroke[1][i + 1]), color, linewidth)
+    if size != 256:
+        img = cv2.resize(img, (size, size))
+        
+    img = np.array(img)
+    return img
 
 def get_bounds(strokes):
 	"""Given a 3-stroke sequence returns the bounds for the respective sketch
@@ -98,8 +111,8 @@ def reshape_to_square(img, size=225):
 	return img_sq
 
 class QDStrokeDataset(data.Dataset):
-    def __init__(self, class_names = qd_names, data_dir = "input", output = "output",
-                 start = 0, count = 340 * 2048,images_category = 2048,image_size = (28,28),transforms=None):
+    def __init__(self, class_names = qd_names, data_dir = "./input/train_simplified", output = "output",
+                 start = 0, count = 340 * 2048,images_category = 2048,image_size = (256,256),transforms=None):
 
         print("Total class number:{}".format(len(class_names)))
      
@@ -108,10 +121,11 @@ class QDStrokeDataset(data.Dataset):
         label = np.zeros(count,dtype=np.int32)
         
         for i,name in enumerate(tqdm(class_names)):
-                if (os.path.isfile("./pic28/{}.npy".format(name)) == False):
-                    print("Error! {} does not exist.".format(name))
+                full_name = data_dir + "/" + name +".csv"
+                if (os.path.isfile(full_name) == False):
+                    print("Error! {} does not exist.".format(full_name))
 
-                cat_data = np.load("./pic28/{}.npy".format(name))
+                cat_data = pd.read_csv(full_name)['drawing']
                 
                 each_cat = int(count//len(class_names))
                 if each_cat > images_category:
@@ -133,6 +147,7 @@ class QDStrokeDataset(data.Dataset):
                 mask = np.random.choice(mask,size = each_cat)
                 
                 for j,item in enumerate(cat_data[mask]):
+                    item = reshape_to_square(strokes_to_npy(item),image_size[0])
                     whole_data[total + j] = item
                     label[total + j] = i
                 del cat_data
@@ -327,3 +342,39 @@ class QDloadData(data.Dataset):
     def __len__(self):
         return self.total_count
     
+class QDloadStrokeData(data.Dataset):
+
+    def __init__(self,no = 0, data_file=None,val = False, image_size=(96,96),transforms=None):
+        
+        if data_file == None:
+            if val == True:
+                data_file = "./val/val_dataset.csv"
+            else:
+                data_file = "./train/" + 'train_k{}.csv.gz'.format(no)
+                
+        if os.path.exists(data_file) == False:
+            print(data_file,"does not exist\n")
+            
+        df = pd.read_csv(data_file)
+        entropybag = bag.from_sequence(df.drawing.values).map(data_draw_cv2)
+        image = entropybag.compute()
+        self.dataset = np.array(list(zip(image,df['y'])))
+        self.total_count = len(self.dataset)
+        self.transforms = transforms
+        self.image_size = image_size
+        print("No = {} and total number of items {}".format(no,self.total_count))
+
+
+    def __getitem__(self, index):
+        img,label = self.dataset[index]
+        
+        if self.transforms is not None:
+        	img = np.asarray(img).reshape(self.image_size[0],self.image_size[1]).astype('uint8')
+        	img = Image.fromarray(img)
+        	img = self.transforms(img)
+        	img = img * 256
+        img = img.reshape(1,self.image_size[0],self.image_size[1])
+        return img,label
+
+    def __len__(self):
+        return self.total_count
