@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from scipy.misc import imresize
 from skimage.draw import line_aa
-
+import six
 
 qd_names =['cup','garden hose', 'marker', 'truck', 'oven', 'cooler', 'birthday cake',
 'camouflage', 'pool', 'dog', 'bear','bird', 'The Great Wall of China','van',
@@ -21,6 +21,131 @@ qd_names =['cup','garden hose', 'marker', 'truck', 'oven', 'cooler', 'birthday c
 'animal migration', 'lantern', 'skyscraper','keyboard','foot','monkey','sleeping bag',
 'brain', 'peanut', 'belt', 'tent','cookie', 'sweater','hot dog',
 'microwave', 'mermaid', 'donut', 'hourglass', 'bee']
+
+STROKE_COUNT = 196
+
+def pad_sequences(sequences, maxlen=None, dtype='int32',
+                  padding='pre', truncating='pre', value=0.):
+    """Pads sequences to the same length.
+    This function transforms a list of
+    `num_samples` sequences (lists of integers)
+    into a 2D Numpy array of shape `(num_samples, num_timesteps)`.
+    `num_timesteps` is either the `maxlen` argument if provided,
+    or the length of the longest sequence otherwise.
+    Sequences that are shorter than `num_timesteps`
+    are padded with `value` at the end.
+    Sequences longer than `num_timesteps` are truncated
+    so that they fit the desired length.
+    The position where padding or truncation happens is determined by
+    the arguments `padding` and `truncating`, respectively.
+    Pre-padding is the default.
+    # Arguments
+        sequences: List of lists, where each element is a sequence.
+        maxlen: Int, maximum length of all sequences.
+        dtype: Type of the output sequences.
+            To pad sequences with variable length strings, you can use `object`.
+        padding: String, 'pre' or 'post':
+            pad either before or after each sequence.
+        truncating: String, 'pre' or 'post':
+            remove values from sequences larger than
+            `maxlen`, either at the beginning or at the end of the sequences.
+        value: Float or String, padding value.
+    # Returns
+        x: Numpy array with shape `(len(sequences), maxlen)`
+    # Raises
+        ValueError: In case of invalid values for `truncating` or `padding`,
+            or in case of invalid shape for a `sequences` entry.
+    """
+    if not hasattr(sequences, '__len__'):
+        raise ValueError('`sequences` must be iterable.')
+    lengths = []
+    for x in sequences:
+        if not hasattr(x, '__len__'):
+            raise ValueError('`sequences` must be a list of iterables. '
+                             'Found non-iterable: ' + str(x))
+        lengths.append(len(x))
+
+    num_samples = len(sequences)
+    if maxlen is None:
+        maxlen = np.max(lengths)
+
+    # take the sample shape from the first non empty sequence
+    # checking for consistency in the main loop below.
+    sample_shape = tuple()
+    for s in sequences:
+        if len(s) > 0:
+            sample_shape = np.asarray(s).shape[1:]
+            break
+
+    is_dtype_str = np.issubdtype(dtype, np.str_) or np.issubdtype(dtype, np.unicode_)
+    if isinstance(value, six.string_types) and dtype != object and not is_dtype_str:
+        raise ValueError("`dtype` {} is not compatible with `value`'s type: {}\n"
+                         "You should set `dtype=object` for variable length strings."
+                         .format(dtype, type(value)))
+
+    x = np.full((num_samples, maxlen) + sample_shape, value, dtype=dtype)
+    for idx, s in enumerate(sequences):
+        if not len(s):
+            continue  # empty list/array was found
+        if truncating == 'pre':
+            trunc = s[-maxlen:]
+        elif truncating == 'post':
+            trunc = s[:maxlen]
+        else:
+            raise ValueError('Truncating type "%s" '
+                             'not understood' % truncating)
+
+        # check `trunc` has expected shape
+        trunc = np.asarray(trunc, dtype=dtype)
+        if trunc.shape[1:] != sample_shape:
+            raise ValueError('Shape of sample %s of sequence at position %s '
+                             'is different from expected shape %s' %
+                             (trunc.shape[1:], idx, sample_shape))
+
+        if padding == 'post':
+            x[idx, :len(trunc)] = trunc
+        elif padding == 'pre':
+            x[idx, -len(trunc):] = trunc
+        else:
+            raise ValueError('Padding type "%s" not understood' % padding)
+    return x
+
+
+def _stack_it(raw_strokes):
+    """preprocess the string and make 
+    a standard Nx3 stroke vector"""
+    stroke_vec = literal_eval(raw_strokes) # string->list
+    #Unwrap the list
+    in_strokes = [(xi,yi,i) for i,(x,y) in enumerate(stroke_vec) for xi,yi in zip(x,y)]
+    c_strokes = np.stack(in_strokes)
+    
+    #Replace stroke id with 1 for continue, 2 for new
+    c_strokes[:,2] = [1]+np.diff(c_strokes[:,2]).tolist()
+    c_strokes[:,2] += 1 # since 0 is no stroke
+    
+    #Pad the strokes with zeros
+    return pad_sequences(c_strokes.swapaxes(0, 1), 
+                         maxlen=STROKE_COUNT, 
+                         padding='post').swapaxes(0, 1)
+
+def read_batch(samples=5, start_row = 0):
+    """
+    load and process the csv files
+    this function is horribly inefficient but simple
+    """
+    out_df_list = []
+    for c_path in ALL_TRAIN_PATHS:
+        c_df = pd.read_csv(c_path, nrows=samples, skiprows=start_row)
+        #print(type(c_df), ";")
+        c_df.columns=COL_NAMES
+        out_df_list += [c_df[['drawing', 'word']]]
+        #print(out_df_list, "==")
+    full_df = pd.concat(out_df_list)
+    full_df['drawing'] = full_df['drawing'].\
+        map(_stack_it)
+    
+    return full_df
+
 
 # The following functions come from Sketch-A-Net
 # [Sketch-A-XNORNet](http://github.com/ayush29feb/Sketch-A-XNORNet)
@@ -357,8 +482,9 @@ class QDloadStrokeData(data.Dataset):
             
         df = pd.read_csv(data_file)
         entropybag = bag.from_sequence(df.drawing.values).map(data_draw_cv2)
+        strokes = df['drawing'].map(_stack_it)
         image = entropybag.compute()
-        self.dataset = np.array(list(zip(image,df['y'])))
+        self.dataset = np.array(list(zip(image,strokes,df['y'])))
         self.total_count = len(self.dataset)
         self.transforms = transforms
         self.image_size = image_size
@@ -366,7 +492,7 @@ class QDloadStrokeData(data.Dataset):
 
 
     def __getitem__(self, index):
-        img,label = self.dataset[index]
+        img,stroke,label = self.dataset[index]
         
         if self.transforms is not None:
         	img = np.asarray(img).reshape(self.image_size[0],self.image_size[1]).astype('uint8')
@@ -374,7 +500,7 @@ class QDloadStrokeData(data.Dataset):
         	img = self.transforms(img)
         	img = img * 256
         img = img.reshape(1,self.image_size[0],self.image_size[1])
-        return img,label
+        return img,stroke,label
 
     def __len__(self):
         return self.total_count
