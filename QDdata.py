@@ -17,10 +17,10 @@ import six
 
 qd_names =['cup','garden hose', 'marker', 'truck', 'oven', 'cooler', 'birthday cake',
 'camouflage', 'pool', 'dog', 'bear','bird', 'The Great Wall of China','van',
-'tiger', 'bench', 'hot tub','coffee cup', 'telephone', 'mug','matches',
+'tiger', 'bench', 'pickup truck','coffee cup', 'telephone', 'mug','matches',
 'animal migration', 'lantern', 'skyscraper','keyboard','foot','monkey','sleeping bag',
-'brain', 'peanut', 'belt', 'tent','cookie', 'sweater','hot dog',
-'microwave', 'mermaid', 'donut', 'hourglass', 'bee']
+'brain', 'peanut', 'belt', 'tent','cookie', 'cake','hot dog',
+'violin', 'cello', 'donut', 'hourglass', 'bee']
 
 STROKE_COUNT = 196
 
@@ -475,7 +475,7 @@ class QDloadStrokeData(data.Dataset):
             if val == True:
                 data_file = "./val/val_dataset.csv"
             else:
-                data_file = "./train/" + 'train_k{}.csv.gz'.format(no)
+                data_file = "./train/" + 'train_k{}.csv'.format(no)
                 
         if os.path.exists(data_file) == False:
             print(data_file,"does not exist\n")
