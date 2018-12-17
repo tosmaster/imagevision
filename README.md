@@ -7,6 +7,17 @@ architecture:
 
 ![architecture](images/architecture.png)
 
+renet.py: It includes resnet model
+QDdata.py: It will create the pixel image on the fly.
+
+1. How to create dataset
+1) run preprocess_data
+
+2. How to train DSN
+1) run all the section untill resnet50 96X96
+2) run Deep Sketch Network
+
+
 Refernces:
 1)A Neural Representation of Sketch Drawings - https://arxiv.org/abs/1704.03477
 
